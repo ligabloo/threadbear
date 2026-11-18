@@ -396,7 +396,7 @@ export class Reinstaller {
   }
 
   status(): ReinstallStatus | undefined {
-    const behind = this.deps.behind();
+    const behind = this.behind();
     if (!behind || !this.deps.checkout) return undefined;
     const s = this.saved;
     const logFile = reinstallLogPath(this.deps.home);
@@ -412,11 +412,22 @@ export class Reinstaller {
     return { state: 'waiting', auto: true };
   }
 
+  // What main's launcher has that this one doesn't. Nothing on Windows:
+  // there's no launcher job to reinstall there by itself yet (spawnJob
+  // refuses), and its task runs launch.mjs from the data dir, which
+  // install-windows.mjs puts back. Reported as behind, each change on main
+  // was a failed reinstall in the Updates panel and an error in Sentry
+  // (THREADBEAR-27, 18 Nov).
+  private behind(): ReturnType<ReinstallDeps['behind']> {
+    if ((this.deps.platform ?? process.platform) === 'win32') return undefined;
+    return this.deps.behind();
+  }
+
   // Update it (runner.reinstall): stages it straight away. Nothing stops,
   // so nothing waits for busy threads.
   request(): ReinstallStatus | undefined {
     if (!this.deps.checkout) throw new Error("This runner isn't running a release, so there's no LaunchAgent to reinstall.");
-    if (!this.deps.behind()) return undefined;
+    if (!this.behind()) return undefined;
     if (!this.running()) {
       // The last run's result goes, or it would be read as this one's.
       this.saved = { key: this.saved.key, requested: true };
@@ -441,7 +452,7 @@ export class Reinstaller {
       this.timer = this.deps.clock.setTimeout(() => this.consider(), POLL_MS);
       return;
     }
-    const behind = this.deps.behind();
+    const behind = this.behind();
     if (behind?.key !== this.lastKey) {
       this.lastKey = behind?.key;
       this.changed();

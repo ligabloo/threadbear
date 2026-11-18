@@ -11,7 +11,7 @@ import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
 import { APP_STAGED_REASON, RUNNING_LIMIT_MS, RUNS_NODE_REASON, Reinstaller, installArgs, jobEnv, jobLabel, jobPlist, launcherKey, reinstallDir, reinstallLogPath, type JobSpec } from '../../src/reinstall.ts';
 
-type Setup = { behind?: { reason: string; key: string }; spawnError?: string; alive?: boolean | undefined };
+type Setup = { behind?: { reason: string; key: string }; spawnError?: string; alive?: boolean | undefined; platform?: NodeJS.Platform };
 
 function setup(s: Setup = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-reinstall-'));
@@ -30,7 +30,7 @@ function setup(s: Setup = {}) {
       onChange: () => changes++,
       recheck: () => rechecks++,
       env: { HOME: '/Users/me', PATH: '/usr/bin:/bin', XPC_SERVICE_NAME: 'com.mikerosoft.threadbear.runner', THREADBEAR_THREAD_ID: 'nope', THREADBEAR_HOME: '/elsewhere' },
-      platform: 'darwin',
+      platform: s.platform ?? 'darwin',
       // The job is going until it writes its result (finish below).
       jobAlive: () => (fs.existsSync(path.join(reinstallDir(home), 'result')) ? false : state.alive),
       spawnJob: (job) => {
@@ -55,6 +55,19 @@ test('it stages by itself as soon as main is ahead, busy threads or not', () => 
   assert.equal(t.jobs[0].label, 'com.mikerosoft.threadbear.runner.reinstall');
   assert.equal(t.jobs[0].args[0], '/Users/me/dev/threadbear/runner/scripts/install-runner.sh');
   assert.equal(t.jobs[0].args.at(-1), '--stage', 'stages: stops nothing, so it never waits for an idle moment');
+});
+
+// Windows has no launcher job to reinstall yet: with main's launcher ahead,
+// it used to start one, have spawnJob refuse, and record a failure (and a
+// Sentry error) on every change (THREADBEAR-27).
+test('on Windows it never starts one, offers none, and says nothing', () => {
+  const t = setup({ platform: 'win32', spawnError: "reinstalling by itself isn't done on win32" });
+  const r = t.make();
+  r.consider();
+  assert.equal(t.jobs.length, 0);
+  assert.equal(r.status(), undefined);
+  assert.equal(r.request(), undefined);
+  assert.equal(t.jobs.length, 0);
 });
 
 test('before it has looked, it says it is about to start by itself', () => {
