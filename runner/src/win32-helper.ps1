@@ -12,9 +12,14 @@
 #   processes   every process, one "pid ppid created" line each, created
 #               as a FILETIME (100 ns since 1601, UTC; 0 when Windows
 #               won't say)
-#   tcpOwners   the pids holding the established TCP socket whose own end
-#               is localAddress:localPort and whose far end is
-#               remoteAddress:remotePort, one a line
+#   snapshot    for port: every established connection to it, with the
+#               pid holding the client's end, and every process (below),
+#               in one answer, so any number of connections waiting to be
+#               looked up share one (peer.ts)
+#
+# The runner doesn't run this file: it reads it once when it starts and
+# passes it to powershell.exe as -EncodedCommand, so changing the file
+# under a running runner changes nothing (Codex's review, 18 Nov 2026).
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -38,9 +43,19 @@ while ($true) {
         }
         $result = ($rows -join "`n")
       }
-      'tcpOwners' {
-        $conns = Get-NetTCPConnection -State Established -LocalAddress ([string]$req.localAddress) -LocalPort ([int]$req.localPort) -RemoteAddress ([string]$req.remoteAddress) -RemotePort ([int]$req.remotePort) -ErrorAction SilentlyContinue
-        $result = ((@($conns) | Where-Object { $_ } | ForEach-Object { [string]$_.OwningProcess }) -join "`n")
+      'snapshot' {
+        # Each established connection to the port, as its client sees it
+        # ("c localAddress localPort remoteAddress remotePort pid"), then
+        # every process ("p pid ppid created"). Taken after the connections,
+        # so a process holding one is in the list.
+        $conns = @(Get-NetTCPConnection -State Established -RemotePort ([int]$req.port) -ErrorAction SilentlyContinue) | Where-Object { $_ } | ForEach-Object {
+          "c $($_.LocalAddress) $($_.LocalPort) $($_.RemoteAddress) $($_.RemotePort) $($_.OwningProcess)"
+        }
+        $procs = Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate | ForEach-Object {
+          $created = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 }
+          "p $($_.ProcessId) $($_.ParentProcessId) $created"
+        }
+        $result = ((@($conns) + @($procs)) -join "`n")
       }
       default { throw "unknown op: $($req.op)" }
     }

@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { lsofPath } from './handover.ts';
 import { psTable, type ProcessRegistry } from './proc.ts';
 import type { Logger } from './log.ts';
-import { parsePids, parseProcesses, win32Helper, winAddress } from './win32-helper.ts';
+import { parseSnapshot, win32Helper, winAddress, type WinConnection, type WinProcess } from './win32-helper.ts';
 
 export type PeerDeps = {
   registry: Pick<ProcessRegistry, 'threadOfPid'> & Partial<Pick<ProcessRegistry, 'threadOfGroup'>>;
@@ -18,6 +18,8 @@ export type PeerDeps = {
   // Tests pass stand-ins: the processes holding this exact client socket.
   lsof?: (sock: PeerSocket) => Promise<number[]>;
   table?: () => Promise<ProcRow[]>;
+  // Windows: the helper's snapshot of a port (tests pass a stand-in).
+  snapshot?: (port: number) => Promise<Snapshot>;
   platform?: NodeJS.Platform;
   // How long lsof and ps each get. Live connections keep LOOKUP_MS; the test
   // of a real lookup gives them longer, as on a loaded Mac lsof alone took
@@ -89,21 +91,61 @@ export function socketOwners(out: string, want: string): number[] {
   return [...pids];
 }
 
-// The same on Windows, from the runner's helper (win32-helper.ts): the
-// pids whose socket has the client's address and port as its own end and
-// the runner's as its far end.
-async function windowsSocketPids(sock: PeerSocket): Promise<number[]> {
-  const text = await win32Helper().ask('tcpOwners', {
-    localAddress: winAddress(sock.remoteAddress),
-    localPort: sock.remotePort,
-    remoteAddress: winAddress(sock.localAddress),
-    remotePort: sock.localPort,
-  });
-  return parsePids(text);
+// The same on Windows, from the runner's helper (win32-helper.ts). Its one
+// PowerShell answers a question at a time, so connections don't each ask:
+// a lookup joins the next snapshot of the port (its connections and every
+// process) taken after it asked, and every lookup waiting then shares it.
+// Asked one each, a thread could open enough connections of its own to
+// queue a stolen-credential one past its deadline (Codex's review, 18 Nov
+// 2026). It's at most two snapshots' wait, whatever the number waiting.
+export type Snapshot = { connections: WinConnection[]; processes: WinProcess[] };
+
+export function coalesce<T>(take: () => Promise<T>): () => Promise<T> {
+  let running: Promise<T> | undefined;
+  let queued: Promise<T> | undefined;
+  const next = (): Promise<T> => {
+    if (!running) {
+      running = take().finally(() => {
+        running = undefined;
+      });
+      return running;
+    }
+    // One is already going, maybe from before this connection: wait for a
+    // new one.
+    queued ??= running.then(
+      () => undefined,
+      () => undefined,
+    ).then(() => {
+      queued = undefined;
+      return next();
+    });
+    return queued;
+  };
+  return next;
 }
 
-async function windowsTable(): Promise<ProcRow[]> {
-  return parseProcesses(await win32Helper().ask('processes'));
+const snapshots = new Map<number, () => Promise<Snapshot>>();
+
+function windowsSnapshot(port: number): Promise<Snapshot> {
+  let take = snapshots.get(port);
+  if (!take) {
+    take = coalesce(async () => parseSnapshot(await win32Helper().ask('snapshot', { port })));
+    snapshots.set(port, take);
+  }
+  return take();
+}
+
+// The pids holding exactly the client's end of this connection, from a
+// snapshot: its own address and port are the client's, its far end the
+// runner's.
+export function snapshotOwners(snap: Snapshot, sock: PeerSocket): number[] {
+  const pids = new Set<number>();
+  for (const c of snap.connections) {
+    if (winAddress(c.localAddress) !== winAddress(sock.remoteAddress) || c.localPort !== sock.remotePort) continue;
+    if (winAddress(c.remoteAddress) !== winAddress(sock.localAddress) || c.remotePort !== sock.localPort) continue;
+    pids.add(c.pid);
+  }
+  return [...pids];
 }
 
 // The thread the process at the client's end of this connection belongs to,
@@ -116,16 +158,29 @@ export async function threadOfSocket(sock: PeerSocket, deps: PeerDeps): Promise<
   let pids: number[];
   let table: ProcRow[];
   const windows = (deps.platform ?? process.platform) === 'win32';
+  const ms = deps.lookupMs ?? LOOKUP_MS;
   try {
-    const ms = deps.lookupMs ?? LOOKUP_MS;
-    const owners = deps.lsof ?? (windows ? windowsSocketPids : (s: PeerSocket) => lsofPids(s, ms));
-    pids = (await deadline(owners(sock), ms)).filter((p) => p !== process.pid);
-    if (pids.length === 0) return undefined;
-    table = await deadline((deps.table ?? (windows ? windowsTable : psTable))(), ms);
+    if (windows && !deps.lsof) {
+      const snap = await deadline((deps.snapshot ?? windowsSnapshot)(sock.localPort), ms);
+      pids = snapshotOwners(snap, sock).filter((p) => p !== process.pid);
+      table = snap.processes;
+    } else {
+      pids = (await deadline((deps.lsof ?? ((s: PeerSocket) => lsofPids(s, ms)))(sock), ms)).filter((p) => p !== process.pid);
+      if (pids.length === 0) return undefined;
+      table = await deadline((deps.table ?? psTable)(), ms);
+    }
   } catch (e) {
+    // On Windows the helper is the runner's own and always there, so a
+    // lookup that fails is something stopping, suspending or swamping it:
+    // the connection closes (rpc.ts) rather than going by its credential
+    // alone, which a stolen one would pass (Codex's review, 18 Nov 2026).
+    // The app and tb connect again. On a Mac or Linux without lsof the
+    // credential still decides, as before.
+    if (windows) throw new Error(`could not tell which process connected: ${String(e)}`);
     deps.log.warn('could not tell which process connected to the RPC', { error: String(e) });
     return undefined;
   }
+  if (pids.length === 0) return undefined;
   const threads = new Set<string>();
   for (const peer of pids) {
     const t = threadOfPid(peer, table, deps);

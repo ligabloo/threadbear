@@ -11,10 +11,38 @@
 // one line each.
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 
 export const HELPER_SCRIPT = path.join(import.meta.dirname, 'win32-helper.ps1');
+
+// The script as the runner found it when it started, passed to PowerShell
+// whole (-EncodedCommand is UTF-16LE in base64), never run from the file:
+// a thread that rewrote the file and then stopped the helper would
+// otherwise get its own script started in its place, answering every
+// question with "nobody" (Codex's review, 18 Nov 2026). PowerShell by its
+// full path, for the same reason: started by name, Windows looks in the
+// runner's own folder first.
+let encoded: string | undefined;
+function helperArgs(): string[] {
+  encoded ??= Buffer.from(fs.readFileSync(HELPER_SCRIPT, 'utf8'), 'utf16le').toString('base64');
+  return ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded];
+}
+
+export function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.win32.join(env.SystemRoot || env.windir || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
+// Read now, as the runner starts (main.ts asks its first question then,
+// and imports this before any thread runs).
+if (process.platform === 'win32') {
+  try {
+    helperArgs();
+  } catch {
+    // no script: every question fails, and the lookup with it
+  }
+}
 
 export type HelperDeps = {
   // What to start: tests pass a stand-in that speaks the same lines.
@@ -36,8 +64,8 @@ export class Win32Helper {
   }
 
   private start(): ChildProcess {
-    const command = this.deps.command ?? 'powershell.exe';
-    const args = this.deps.args ?? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER_SCRIPT];
+    const command = this.deps.command ?? powershellPath();
+    const args = this.deps.args ?? helperArgs();
     const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
     this.child = child;
     readline.createInterface({ input: child.stdout! }).on('line', (line) => this.answer(line));
@@ -117,8 +145,20 @@ export function parseProcesses(text: string): WinProcess[] {
   return rows;
 }
 
-export function parsePids(text: string): number[] {
-  return [...new Set(text.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^\d+$/.test(l)).map(Number))];
+// A snapshot's answer: each connection's client end (its own address and
+// port, the server's, and the pid holding it), and every process.
+export type WinConnection = { localAddress: string; localPort: number; remoteAddress: string; remotePort: number; pid: number };
+
+export function parseSnapshot(text: string): { connections: WinConnection[]; processes: WinProcess[] } {
+  const connections: WinConnection[] = [];
+  const processes: WinProcess[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const c = /^c (\S+) (\d+) (\S+) (\d+) (\d+)\s*$/.exec(line);
+    if (c) connections.push({ localAddress: c[1]!, localPort: Number(c[2]), remoteAddress: c[3]!, remotePort: Number(c[4]), pid: Number(c[5]) });
+    const p = /^p (\d+) (\d+) (\d+)\s*$/.exec(line);
+    if (p) processes.push({ pid: Number(p[1]), ppid: Number(p[2]), created: BigInt(p[3]!) });
+  }
+  return { connections, processes };
 }
 
 // Windows names an IPv4-mapped address as plain IPv4 (Node's dual-stack form

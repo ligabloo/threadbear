@@ -6,8 +6,9 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { nullLogger } from '../../src/log.ts';
-import { threadOfSocket } from '../../src/peer.ts';
-import { Win32Helper, parsePids, parseProcesses, winAddress } from '../../src/win32-helper.ts';
+import { coalesce, snapshotOwners, threadOfSocket } from '../../src/peer.ts';
+import { HELPER_SCRIPT, Win32Helper, parseProcesses, parseSnapshot, powershellPath, winAddress } from '../../src/win32-helper.ts';
+import fs from 'node:fs';
 import { PATIENCE_MS } from '../helpers/patience.ts';
 import { onlyOnWindows } from '../helpers/platform.ts';
 
@@ -57,7 +58,10 @@ test('its text answers parse, and odd lines are dropped', () => {
     { pid: 4, ppid: 0, created: 0n },
     { pid: 1200, ppid: 800, created: 133761234567890123n },
   ]);
-  assert.deepEqual(parsePids('12\r\n12\n\n34\nx'), [12, 34]);
+  assert.deepEqual(parseSnapshot('c 127.0.0.1 50000 127.0.0.1 8797 1200\r\np 1200 800 5\nnoise\n'), {
+    connections: [{ localAddress: '127.0.0.1', localPort: 50000, remoteAddress: '127.0.0.1', remotePort: 8797, pid: 1200 }],
+    processes: [{ pid: 1200, ppid: 800, created: 5n }],
+  });
   assert.equal(winAddress('::ffff:127.0.0.1'), '127.0.0.1');
   assert.equal(winAddress('::1'), '::1');
 });
@@ -111,4 +115,49 @@ test('on Windows a real connection is found through the helper', onlyOnWindows('
     server.close();
     (await import('../../src/win32-helper.ts')).win32Helper().stop();
   }
+});
+
+test("a snapshot names only who holds exactly the client's end of this connection", () => {
+  const sock = { remoteAddress: '::ffff:127.0.0.1', remotePort: 50000, localAddress: '::ffff:127.0.0.1', localPort: 8797 };
+  const snap = parseSnapshot(
+    [
+      'c 127.0.0.1 50000 127.0.0.1 8797 100', // this one
+      'c 127.0.0.2 50000 127.0.0.1 8797 200', // the same port from another loopback address
+      'c 127.0.0.1 50001 127.0.0.1 8797 300', // another connection
+      'c 127.0.0.1 50000 127.0.0.1 9999 400', // the same client port to another server
+    ].join('\n'),
+  );
+  assert.deepEqual(snapshotOwners(snap, sock), [100]);
+});
+
+// One PowerShell answers one question at a time. Lookups that each asked
+// could be queued past their deadline by a thread opening connections.
+test('lookups waiting together share one snapshot, taken after they asked', async () => {
+  let taken = 0;
+  const gates: (() => void)[] = [];
+  const take = coalesce(() => new Promise<number>((r) => gates.push(() => r(++taken))));
+  const first = take();
+  const waiting = Array.from({ length: 50 }, () => take());
+  assert.equal(gates.length, 1, 'only one at a time');
+  gates.shift()!();
+  assert.equal(await first, 1);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(gates.length, 1, 'the fifty share the next one');
+  gates.shift()!();
+  assert.deepEqual(new Set(await Promise.all(waiting)), new Set([2]));
+  assert.equal(taken, 2);
+});
+
+test('on Windows a lookup that fails or runs out of time closes the connection instead of trusting its credential', async () => {
+  const sock = { remoteAddress: '127.0.0.1', remotePort: 1234, localAddress: '127.0.0.1', localPort: 8797 };
+  const deps = { registry: { threadOfPid: () => undefined }, known: () => true, log: nullLogger, platform: 'win32' as const, lookupMs: 100 };
+  await assert.rejects(threadOfSocket(sock, { ...deps, snapshot: async () => { throw new Error('the helper exited'); } }), /could not tell/);
+  await assert.rejects(threadOfSocket(sock, { ...deps, snapshot: () => new Promise(() => {}) }), /could not tell/);
+  // Found, and nobody's: the credential decides, as on a Mac.
+  assert.equal(await threadOfSocket(sock, { ...deps, snapshot: async () => parseSnapshot('c 127.0.0.1 1234 127.0.0.1 8797 4242\np 4242 1 9') }), undefined);
+});
+
+test("the helper's script is passed whole and PowerShell is run by its full path", () => {
+  assert.ok(fs.readFileSync(HELPER_SCRIPT, 'utf8').includes("'snapshot'"));
+  assert.equal(powershellPath({ SystemRoot: 'C:\\Windows' }), 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
 });
