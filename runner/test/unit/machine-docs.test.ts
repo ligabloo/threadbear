@@ -38,6 +38,7 @@ test('docs/machines.md matches the machines', () => {
     fs.writeFileSync(FILE, made);
     return;
   }
-  const written = fs.existsSync(FILE) ? fs.readFileSync(FILE, 'utf8') : '';
+  // Windows' git can check it out with CRLF line endings.
+  const written = fs.existsSync(FILE) ? fs.readFileSync(FILE, 'utf8').replace(/\r\n/g, '\n') : '';
   assert.equal(written, made, 'docs/machines.md is out of date: run `npm run machine-docs` in runner/ and commit it');
 });
