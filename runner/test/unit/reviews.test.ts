@@ -429,7 +429,7 @@ test('a reply can carry pictures: kept with the review, sent with the answer, on
   const saved=h.runner.saveReview(thread.id,review.id,0,{pickedId:'A',notes:{},reply:'Is the apple cut off? [Picture 1]',images:[pasted]}).review;
   const kept=saved.draft.images![0];
   assert.notEqual(kept.path,pasted.path,'copied in beside the review, so inbox/ can be cleaned');
-  assert.match(kept.path,new RegExp(`reviews/${review.id}/reply/`));
+  assert.match(kept.path,new RegExp(`reviews[\\\\/]${review.id}[\\\\/]reply[\\\\/]`));
   assert.equal(kept.mediaType,'image/png');
   // Saved again as the window has it now: the same copy, not another.
   const again=h.runner.saveReview(thread.id,review.id,saved.revision,{...saved.draft}).review;

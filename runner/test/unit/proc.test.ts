@@ -8,7 +8,7 @@ import { acquireLock } from '../../src/lock.ts';
 import { nullLogger } from '../../src/log.ts';
 import { tmpDir } from '../helpers/fakes.ts';
 import { PATIENCE_MS } from '../helpers/patience.ts';
-import { IS_WINDOWS, NO_SIGNALS_ON_WINDOWS, onlyOnWindows, withoutPowerShell } from '../helpers/platform.ts';
+import { IS_WINDOWS, NO_SIGNALS_ON_WINDOWS, onlyOnWindows, skipOnWindows, withoutPowerShell } from '../helpers/platform.ts';
 import { pathToFileURL } from 'node:url';
 
 const RUNNER_DIR = path.join(import.meta.dirname, '..', '..');
@@ -36,7 +36,7 @@ async function until(fn: () => boolean, ms = PATIENCE_MS): Promise<boolean> {
 // time moves when the clock is stepped (WSL, 17 Nov), so records there also
 // keep the boot id and /proc's start ticks, which don't. lstart stays in them
 // for older releases, and records older runners wrote still match.
-test("a process's recorded start doesn't depend on the clock, and older records still match", () => {
+test("a process's recorded start doesn't depend on the clock, and older records still match", skipOnWindows("lstart is ps's, and Windows records its own start time"), () => {
   const info = processInfo(process.pid)!;
   const ps = execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim().replace(/\s+/g, ' ');
   assert.equal(info.lstart, ps, 'lstart is still what older releases compare');

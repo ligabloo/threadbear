@@ -1,7 +1,9 @@
 # Unit test files that fail on Windows today (17 Nov 2026: 79 of 262 files;
 # 3,245 of 3,893 tests passed). scripts/test-windows.mjs runs every other
 # file as a hard check and these as a report. Take a file off the list once
-# it passes there; the list only shrinks.
+# it passes there; the list only shrinks, except for a new test of something
+# that only runs on a Mac or Linux (tb land's, added 18 Nov: its test
+# harness makes repos through /bin/sh).
 account-isolation.test.ts
 acp-adapter.test.ts
 acp-grok.test.ts
@@ -24,7 +26,9 @@ highlights.test.ts
 home-patch-edits.test.ts
 instructions.test.ts
 land-alone.test.ts
+land-culprit.test.ts
 land-gate.test.ts
+land-push.test.ts
 land-queue.test.ts
 land-times.test.ts
 launch-staged-app.test.ts

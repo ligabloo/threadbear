@@ -11,6 +11,7 @@ import { checkSummary } from '../helpers/protocol-check.ts';
 import { PatchTrust, patchHash } from '../../src/patch-trust.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { borrowedPanelId } from '../../src/runner/buttons.ts';
+import { SHELL } from '../helpers/platform.ts';
 
 // A folder like yt-channel-manager: a web panel whose badge starts its
 // server (here, leaves a file), and a list panel.
@@ -39,7 +40,7 @@ async function fixture() {
   const yt = youtubeFolder();
   const trust = new PatchTrust({ file: path.join(tmpDir(), 'patch-trust.json') });
   assert.ok(trust.trust(yt.file, patchHash(yt.file).hash));
-  const h = makeHarness(undefined, {}, { panelsRoot: fs.realpathSync(tmpDir()), patchTrust: trust, actionShell: ['/bin/sh', '-c'], actionTimeoutMs: 5000 });
+  const h = makeHarness(undefined, {}, { panelsRoot: fs.realpathSync(tmpDir()), patchTrust: trust, actionShell: SHELL, actionTimeoutMs: 5000 });
   const brief = h.runner.create({ text: 'Daily brief', accountId: 'claude-3', cwd: fs.realpathSync(tmpDir()) }).thread;
   await tick();
   await h.runner.patchesIdle();

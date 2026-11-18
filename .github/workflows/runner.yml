@@ -161,8 +161,12 @@ jobs:
           cache: npm
           cache-dependency-path: runner/package-lock.json
 
+      # The repo root's too: the backend tests load convex/server from there
+      # (test/helpers/convex-memory.ts), and 28 files failed without it.
       - name: Packages
-        run: npm ci --no-audit --no-fund
+        run: |
+          npm ci --no-audit --no-fund --prefix ..
+          npm ci --no-audit --no-fund
 
       - name: Typecheck
         run: npm run typecheck
