@@ -10,6 +10,8 @@ import type { Logger } from './log.ts';
 import { parseSnapshot, win32Helper, winAddress, type WinConnection, type WinProcess } from './win32-helper.ts';
 
 export type PeerDeps = {
+  // threadOfPid gets the process's start time where the lookup has one
+  // (Windows), so a CLI's pid taken by a newer process doesn't count.
   registry: Pick<ProcessRegistry, 'threadOfPid'> & Partial<Pick<ProcessRegistry, 'threadOfGroup'>>;
   // A thread this runner or a draining one really has (a registry entry can
   // be a job's label, like models:<account>).
@@ -164,6 +166,10 @@ export async function threadOfSocket(sock: PeerSocket, deps: PeerDeps): Promise<
       const snap = await deadline((deps.snapshot ?? windowsSnapshot)(sock.localPort), ms);
       pids = snapshotOwners(snap, sock).filter((p) => p !== process.pid);
       table = snap.processes;
+      // The connection is open (the runner accepted it before asking), so
+      // a snapshot without it hasn't seen what it should (Codex's second
+      // review): not "nobody's".
+      if (pids.length === 0) throw new Error("the snapshot doesn't have this connection");
     } else {
       pids = (await deadline((deps.lsof ?? ((s: PeerSocket) => lsofPids(s, ms)))(sock), ms)).filter((p) => p !== process.pid);
       if (pids.length === 0) return undefined;
@@ -195,7 +201,7 @@ function threadOfPid(peer: number, table: ProcRow[], deps: PeerDeps): string | u
   const seen = new Set<number>();
   for (let p: number | undefined = peer; p !== undefined && p > 1 && !seen.has(p); p = parentOf(rows, p)) {
     seen.add(p);
-    const t = deps.registry.threadOfPid(p);
+    const t = deps.registry.threadOfPid(p, rows.get(p)?.created);
     if (t && deps.known(t)) return t;
   }
   // Left its parents behind (a nohup or a backgrounded subshell), but still

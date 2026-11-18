@@ -48,7 +48,16 @@ while ($true) {
         # ("c localAddress localPort remoteAddress remotePort pid"), then
         # every process ("p pid ppid created"). Taken after the connections,
         # so a process holding one is in the list.
-        $conns = @(Get-NetTCPConnection -State Established -RemotePort ([int]$req.port) -ErrorAction SilentlyContinue) | Where-Object { $_ } | ForEach-Object {
+        # None found is an error of its own kind (ObjectNotFound), and the
+        # only one that means none: any other (access denied, the provider
+        # failing) fails the snapshot, so it can't pass for "nobody's".
+        try {
+          $found = @(Get-NetTCPConnection -State Established -RemotePort ([int]$req.port) -ErrorAction Stop)
+        } catch {
+          if ($_.CategoryInfo.Category -ne 'ObjectNotFound') { throw }
+          $found = @()
+        }
+        $conns = $found | Where-Object { $_ } | ForEach-Object {
           "c $($_.LocalAddress) $($_.LocalPort) $($_.RemoteAddress) $($_.RemotePort) $($_.OwningProcess)"
         }
         $procs = Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate | ForEach-Object {

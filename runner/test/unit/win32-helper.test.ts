@@ -7,6 +7,9 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { nullLogger } from '../../src/log.ts';
 import { coalesce, snapshotOwners, threadOfSocket } from '../../src/peer.ts';
+import { ProcessRegistry, processInfo, startedAt } from '../../src/proc.ts';
+import { tmpDir } from '../helpers/fakes.ts';
+import path from 'node:path';
 import { HELPER_SCRIPT, Win32Helper, parseProcesses, parseSnapshot, powershellPath, winAddress } from '../../src/win32-helper.ts';
 import fs from 'node:fs';
 import { PATIENCE_MS } from '../helpers/patience.ts';
@@ -153,6 +156,8 @@ test('on Windows a lookup that fails or runs out of time closes the connection i
   const deps = { registry: { threadOfPid: () => undefined }, known: () => true, log: nullLogger, platform: 'win32' as const, lookupMs: 100 };
   await assert.rejects(threadOfSocket(sock, { ...deps, snapshot: async () => { throw new Error('the helper exited'); } }), /could not tell/);
   await assert.rejects(threadOfSocket(sock, { ...deps, snapshot: () => new Promise(() => {}) }), /could not tell/);
+  // A snapshot without this (open) connection hasn't seen what it should.
+  await assert.rejects(threadOfSocket(sock, { ...deps, snapshot: async () => parseSnapshot('p 4242 1 9') }), /could not tell/);
   // Found, and nobody's: the credential decides, as on a Mac.
   assert.equal(await threadOfSocket(sock, { ...deps, snapshot: async () => parseSnapshot('c 127.0.0.1 1234 127.0.0.1 8797 4242\np 4242 1 9') }), undefined);
 });
@@ -160,4 +165,39 @@ test('on Windows a lookup that fails or runs out of time closes the connection i
 test("the helper's script is passed whole and PowerShell is run by its full path", () => {
   assert.ok(fs.readFileSync(HELPER_SCRIPT, 'utf8').includes("'snapshot'"));
   assert.equal(powershellPath({ SystemRoot: 'C:\\Windows' }), 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+});
+
+// A CLI that exits can have its pid taken by another thread's new CLI before
+// a lookup reads the registry: the snapshot's start time says which it saw.
+test("a registered CLI counts only for the process that started when it did", () => {
+  assert.equal(startedAt({ lstart: '133761234567890123' }, 133761234567890120n), true, 'within a microsecond');
+  assert.equal(startedAt({ lstart: '133761234567890123' }, 133761234597890123n), false, 'three seconds later: another process');
+  assert.equal(startedAt({ lstart: '~133761234567890123' }, 133761234597890123n), true, 'an estimate gets ten seconds');
+  assert.equal(startedAt({ lstart: '~133761234567890123' }, 133761236567890123n), false);
+  assert.equal(startedAt({}, 5n), true, 'nothing recorded: the pid stands');
+  assert.equal(startedAt({ lstart: '133761234567890123' }, undefined), true, 'no time read: the pid stands');
+  const reg = new ProcessRegistry(tmpDir(), nullLogger);
+  reg.add(process.pid, 'claude', 'th1');
+  const lstart = processInfo(process.pid)?.lstart;
+  if (lstart && /^\d+$/.test(lstart)) {
+    assert.equal(reg.threadOfPid(process.pid, BigInt(lstart)), 'th1');
+    assert.equal(reg.threadOfPid(process.pid, BigInt(lstart) + 30_000_000n), undefined);
+  }
+  assert.equal(reg.threadOfPid(process.pid), 'th1');
+  reg.remove(process.pid);
+});
+
+test("on Windows a CLI's recorded start matches the helper's snapshot of it", onlyOnWindows('The helper is PowerShell, which only Windows has'), async () => {
+  const reg = new ProcessRegistry(tmpDir(), nullLogger);
+  reg.add(process.pid, 'claude', 'th1');
+  try {
+    const { win32Helper, parseSnapshot } = await import('../../src/win32-helper.ts');
+    const snap = parseSnapshot(await win32Helper().ask('snapshot', { port: 1 }));
+    const me = snap.processes.find((p) => p.pid === process.pid);
+    assert.ok(me && me.created > 0n, 'the snapshot has this process with a start time');
+    assert.equal(reg.threadOfPid(process.pid, me.created), 'th1');
+  } finally {
+    reg.remove(process.pid);
+    (await import('../../src/win32-helper.ts')).win32Helper().stop();
+  }
 });

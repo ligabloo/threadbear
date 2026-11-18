@@ -5,6 +5,7 @@ import type { SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sd
 import type { Logger } from './log.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 import { IS_WINDOWS } from './platform.ts';
+import { powershellPath } from './win32-helper.ts';
 
 // A process group, with its leader's start time so a recycled pid is never
 // mistaken for it. lstart is '' when the leader had already exited when the
@@ -104,9 +105,13 @@ export class ProcessRegistry {
   // The thread a live CLI was started for: this runner's own (gone from the
   // map when it exits), or one a draining runner still has (its list is kept
   // beside this one, where a recycled pid wouldn't have the same start time).
-  threadOfPid(pid: number): string | undefined {
+  // created (Windows, a FILETIME from the peer lookup's snapshot) is when the
+  // process with this pid started: a CLI that has exited, its pid taken by
+  // another thread's new CLI before the lookup reads this, mustn't count for
+  // the new one (Codex's review, 18 Nov 2026).
+  threadOfPid(pid: number, created?: bigint): string | undefined {
     const own = this.entries.get(pid);
-    if (own) return own.threadId;
+    if (own) return startedAt(own, created) ? own.threadId : undefined;
     let names: string[];
     try {
       names = fs.readdirSync(path.dirname(this.file)).filter((n) => /^children-\d+\.json$/.test(n));
@@ -116,7 +121,10 @@ export class ProcessRegistry {
     for (const n of names) {
       const entries = readJsonSync<Entry[]>(path.join(path.dirname(this.file), n));
       const e = Array.isArray(entries) ? entries.find((x) => x?.pid === pid) : undefined;
-      if (e?.threadId && (!(e.lstart || e.started) || sameStart(e, processInfo(pid)))) return e.threadId;
+      if (!e?.threadId) continue;
+      if (created) {
+        if (startedAt(e, created)) return e.threadId;
+      } else if (!(e.lstart || e.started) || sameStart(e, processInfo(pid))) return e.threadId;
     }
     return undefined;
   }
@@ -326,7 +334,7 @@ export function processInfo(pid: number): ProcessInfo | null {
 function processInfoWindows(pid: number): { pgid: number; lstart: string; command: string } | null {
   try {
     const out = execFileSync(
-      'powershell.exe',
+      powershellPath(),
       [
         '-NoProfile',
         '-NonInteractive',
@@ -363,6 +371,20 @@ export function ownStartTime(): string {
 }
 
 // True if a start time recorded earlier is the one just read.
+// Whether a recorded CLI is the process that started at `created` (a
+// FILETIME, from Windows' process list, whose times are a microsecond
+// coarser than Get-Process's, so they match to within one). No time to go
+// by on either side: the pid stands, as it did before.
+export function startedAt(recorded: { lstart?: string }, created: bigint | undefined): boolean {
+  if (!created || !recorded.lstart) return true;
+  const exact = /^(\d+)$/.exec(recorded.lstart);
+  const est = /^~(\d+)$/.exec(recorded.lstart);
+  const at = exact?.[1] ?? est?.[1];
+  if (!at) return true;
+  const gap = BigInt(at) - created;
+  return (gap < 0n ? -gap : gap) <= (exact ? 10n : START_SLACK);
+}
+
 export function sameStartTime(recorded: string, read: string): boolean {
   if (recorded === read) return true;
   const est = /^~(\d+)$/.exec(recorded);
