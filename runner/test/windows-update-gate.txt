@@ -15,3 +15,4 @@ codex-current.test.ts
 deploy-steps.test.ts
 fsutil.test.ts
 system-tools.test.ts
+win32-helper.test.ts

@@ -124,7 +124,10 @@ for: `{}` for its owner, or `{"threadId", "mode", "limited"}`.
 environment and reading the token file, so the runner doesn't only go by what's
 presented. After auth it finds the process at the other end of the connection
 and walks up its parents; if one is a thread's CLI, the connection is that
-thread. The process is the one `lsof` shows holding a socket named exactly
+thread. On Windows the runner's helper (`runner/src/win32-helper.ps1`)
+answers in place of `lsof` and `ps`, and a parent that started after its
+child isn't counted: Windows keeps a dead parent's id as its children's
+parent id and gives the id to the next process. The process is the one `lsof` shows holding a socket named exactly
 client address and port `->` the runner's address and port: never one that
 only shares the client's port number (another loopback address, or a socket
 whose far end uses that number), which could be another thread's (Daybreak

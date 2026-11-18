@@ -119,7 +119,11 @@ File references are where to look.
   `conhost.exe --headless` with Node and `<data folder>\runner\launch.mjs`
   so no window shows; its data folder is `%LOCALAPPDATA%\Threadbear`, with
   the task's definition as `runner\task.xml` and `bin\tb.cmd`, whose folder
-  goes on the user's PATH (`runner/scripts/install-windows.mjs`).
+  goes on the user's PATH (`runner/scripts/install-windows.mjs`). In place
+  of `lsof` and `ps` it keeps one hidden `powershell.exe` running for its
+  life (`runner/src/win32-helper.ps1`), which lists processes
+  (`Get-CimInstance Win32_Process`) and finds who holds a connection
+  (`Get-NetTCPConnection`).
 - **A one-shot update job:** when the runner's LaunchAgent or
   Threadbear Runner.app is behind main (or you press Update it in the
   Updates panel after one failed), the runner

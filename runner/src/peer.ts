@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { lsofPath } from './handover.ts';
 import { psTable, type ProcessRegistry } from './proc.ts';
 import type { Logger } from './log.ts';
+import { parsePids, parseProcesses, win32Helper, winAddress } from './win32-helper.ts';
 
 export type PeerDeps = {
   registry: Pick<ProcessRegistry, 'threadOfPid'> & Partial<Pick<ProcessRegistry, 'threadOfGroup'>>;
@@ -16,7 +17,8 @@ export type PeerDeps = {
   log: Logger;
   // Tests pass stand-ins: the processes holding this exact client socket.
   lsof?: (sock: PeerSocket) => Promise<number[]>;
-  table?: () => Promise<{ pid: number; ppid: number; pgid?: number }[]>;
+  table?: () => Promise<ProcRow[]>;
+  platform?: NodeJS.Platform;
   // How long lsof and ps each get. Live connections keep LOOKUP_MS; the test
   // of a real lookup gives them longer, as on a loaded Mac lsof alone took
   // over 3 s (a fork, 15 Nov).
@@ -24,6 +26,12 @@ export type PeerDeps = {
 };
 
 const LOOKUP_MS = 3000;
+
+// A process as the lookup sees it. created (Windows only, a FILETIME) is
+// when it started: Windows keeps a process's parent id after the parent
+// has gone, and gives that id to the next process, so a parent that
+// started after its child isn't its parent.
+export type ProcRow = { pid: number; ppid: number; pgid?: number; created?: bigint };
 
 // The accepted connection, as the runner's side sees it: the client's
 // address and port, and the address and port it reached. All four, because
@@ -81,19 +89,39 @@ export function socketOwners(out: string, want: string): number[] {
   return [...pids];
 }
 
+// The same on Windows, from the runner's helper (win32-helper.ts): the
+// pids whose socket has the client's address and port as its own end and
+// the runner's as its far end.
+async function windowsSocketPids(sock: PeerSocket): Promise<number[]> {
+  const text = await win32Helper().ask('tcpOwners', {
+    localAddress: winAddress(sock.remoteAddress),
+    localPort: sock.remotePort,
+    remoteAddress: winAddress(sock.localAddress),
+    remotePort: sock.localPort,
+  });
+  return parsePids(text);
+}
+
+async function windowsTable(): Promise<ProcRow[]> {
+  return parseProcesses(await win32Helper().ask('processes'));
+}
+
 // The thread the process at the client's end of this connection belongs to,
 // or undefined when it isn't under a thread's CLI or the lookup can't tell
-// (no lsof, on a machine without it): then the credential presented decides.
+// (no lsof, on a machine without it, or the Windows helper failing): then
+// the credential presented decides.
 // Every process holding the socket is looked at (a forked child keeps its
 // parent's); if they name different threads it throws AmbiguousPeer.
 export async function threadOfSocket(sock: PeerSocket, deps: PeerDeps): Promise<string | undefined> {
   let pids: number[];
-  let table: { pid: number; ppid: number; pgid?: number }[];
+  let table: ProcRow[];
+  const windows = (deps.platform ?? process.platform) === 'win32';
   try {
     const ms = deps.lookupMs ?? LOOKUP_MS;
-    pids = (await (deps.lsof ?? ((s: PeerSocket) => lsofPids(s, ms)))(sock)).filter((p) => p !== process.pid);
+    const owners = deps.lsof ?? (windows ? windowsSocketPids : (s: PeerSocket) => lsofPids(s, ms));
+    pids = (await deadline(owners(sock), ms)).filter((p) => p !== process.pid);
     if (pids.length === 0) return undefined;
-    table = await deadline((deps.table ?? psTable)(), ms);
+    table = await deadline((deps.table ?? (windows ? windowsTable : psTable))(), ms);
   } catch (e) {
     deps.log.warn('could not tell which process connected to the RPC', { error: String(e) });
     return undefined;
@@ -107,10 +135,10 @@ export async function threadOfSocket(sock: PeerSocket, deps: PeerDeps): Promise<
   return [...threads][0];
 }
 
-function threadOfPid(peer: number, table: { pid: number; ppid: number; pgid?: number }[], deps: PeerDeps): string | undefined {
-  const parents = new Map(table.map((r) => [r.pid, r.ppid]));
+function threadOfPid(peer: number, table: ProcRow[], deps: PeerDeps): string | undefined {
+  const rows = new Map(table.map((r) => [r.pid, r]));
   const seen = new Set<number>();
-  for (let p: number | undefined = peer; p !== undefined && p > 1 && !seen.has(p); p = parents.get(p)) {
+  for (let p: number | undefined = peer; p !== undefined && p > 1 && !seen.has(p); p = parentOf(rows, p)) {
     seen.add(p);
     const t = deps.registry.threadOfPid(p);
     if (t && deps.known(t)) return t;
@@ -121,4 +149,15 @@ function threadOfPid(peer: number, table: { pid: number; ppid: number; pgid?: nu
   const byGroup = group ? deps.registry.threadOfGroup?.(group) : undefined;
   if (byGroup && deps.known(byGroup)) return byGroup;
   return undefined;
+}
+
+// The parent a process really has: none when the recorded parent started
+// after it did (Windows: the parent died and its id went to a newer
+// process, which mustn't count as its parent).
+function parentOf(rows: Map<number, ProcRow>, pid: number): number | undefined {
+  const row = rows.get(pid);
+  if (!row) return undefined;
+  const parent = rows.get(row.ppid);
+  if (row.created && parent?.created && parent.created > row.created) return undefined;
+  return row.ppid;
 }

@@ -15,6 +15,7 @@ import { threadKey as makeThreadKey } from './rpc-auth.ts';
 import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError, readRunnerJson, writeRunnerJson } from './config.ts';
 import { startHousekeeping } from './housekeeping.ts';
 import { startBorrowSweep } from './runner/worktrees.ts';
+import { win32Helper } from './win32-helper.ts';
 import { RELEASE, markConfigStop, markGoodLater, onStopRequest, onSupervisorGone, ownCheckout, readRelease, readState, requestHandover, supervised, takeRollbackNotice, tellLaunchListening } from './release.ts';
 import { PatchTrust } from './patch-trust.ts';
 import type { RunnerUpdates } from './runner.ts';
@@ -1429,6 +1430,9 @@ async function main(): Promise<void> {
   // children would be orphans.
   onSupervisorGone(() => void stop('supervisor gone'));
   onStopRequest(() => void stop('asked to stop'));
+  // Windows: the helper peer identity asks (win32-helper.ts) starts now,
+  // so the first connection's lookup doesn't wait on PowerShell starting.
+  if (process.platform === 'win32') void win32Helper().ask('ping').catch(() => {});
   process.on('SIGTERM', () => void stop('SIGTERM'));
   process.on('SIGINT', () => void stop('SIGINT'));
   process.on('SIGHUP', () => void stop('SIGHUP'));
