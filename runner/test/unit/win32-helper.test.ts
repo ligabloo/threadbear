@@ -7,7 +7,7 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { nullLogger } from '../../src/log.ts';
 import { coalesce, snapshotOwners, threadOfSocket } from '../../src/peer.ts';
-import { ProcessRegistry, processInfo, startedAt } from '../../src/proc.ts';
+import { ProcessRegistry, StaleProcess, processInfo, startedAt } from '../../src/proc.ts';
 import { tmpDir } from '../helpers/fakes.ts';
 import path from 'node:path';
 import { HELPER_SCRIPT, Win32Helper, parseProcesses, parseSnapshot, powershellPath, winAddress } from '../../src/win32-helper.ts';
@@ -181,7 +181,8 @@ test("a registered CLI counts only for the process that started when it did", ()
   const lstart = processInfo(process.pid)?.lstart;
   if (lstart && /^\d+$/.test(lstart)) {
     assert.equal(reg.threadOfPid(process.pid, BigInt(lstart)), 'th1');
-    assert.equal(reg.threadOfPid(process.pid, BigInt(lstart) + 30_000_000n), undefined);
+    // Not "no thread", which would leave the credential to decide: the lookup fails.
+    assert.throws(() => reg.threadOfPid(process.pid, BigInt(lstart) + 30_000_000n), StaleProcess);
   }
   assert.equal(reg.threadOfPid(process.pid), 'th1');
   reg.remove(process.pid);
@@ -199,5 +200,42 @@ test("on Windows a CLI's recorded start matches the helper's snapshot of it", on
   } finally {
     reg.remove(process.pid);
     (await import('../../src/win32-helper.ts')).win32Helper().stop();
+  }
+});
+
+test('on Windows a CLI pid that has gone to a newer process closes the connection, rather than meaning "no thread"', async () => {
+  const sock = { remoteAddress: '127.0.0.1', remotePort: 1234, localAddress: '127.0.0.1', localPort: 8797 };
+  const reg = new ProcessRegistry(tmpDir(), nullLogger);
+  reg.add(process.pid, 'claude', 'thB');
+  try {
+    const lstart = processInfo(process.pid)?.lstart ?? '';
+    const recorded = /^\d+$/.test(lstart) ? BigInt(lstart) : 0n;
+    if (!recorded) return; // a Mac's ps gives a date, not a FILETIME: the Windows run checks this
+    // A's child (500) under a CLI whose pid this process (B's CLI) now has, from before it started.
+    const snap = parseSnapshot(`c 127.0.0.1 1234 127.0.0.1 8797 500\np 500 ${process.pid} ${recorded - 5n}\np ${process.pid} 1 ${recorded - 50_000_000n}`);
+    await assert.rejects(threadOfSocket(sock, { registry: reg, known: () => true, log: nullLogger, platform: 'win32', snapshot: async () => snap }), StaleProcess);
+  } finally {
+    reg.remove(process.pid);
+  }
+});
+
+// A module of the same name earlier on PSModulePath (the user's Documents
+// folder is, and a thread can write there) must not stand in for Windows'
+// own (Codex's third review).
+test("on Windows the helper uses Windows' own NetTCPIP, not one planted earlier on the module path", onlyOnWindows('The helper is PowerShell, which only Windows has'), async () => {
+  const dir = tmpDir();
+  const mod = path.join(dir, 'NetTCPIP');
+  fs.mkdirSync(mod);
+  fs.writeFileSync(path.join(mod, 'NetTCPIP.psm1'), "function Get-NetTCPConnection { [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 1; RemoteAddress = '127.0.0.1'; RemotePort = 1; OwningProcess = 4242 } }\nExport-ModuleMember -Function Get-NetTCPConnection\n");
+  const before = process.env.PSModulePath;
+  process.env.PSModulePath = `${dir};${before ?? ''}`;
+  const h = new Win32Helper({ timeoutMs: PATIENCE_MS });
+  try {
+    const snap = parseSnapshot(await h.ask('snapshot', { port: 1 }));
+    assert.ok(!snap.connections.some((c) => c.pid === 4242), 'the planted module answered');
+    assert.ok(snap.processes.length > 10, 'the real process list came back');
+  } finally {
+    h.stop();
+    process.env.PSModulePath = before;
   }
 });

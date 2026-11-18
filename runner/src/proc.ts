@@ -109,9 +109,16 @@ export class ProcessRegistry {
   // process with this pid started: a CLI that has exited, its pid taken by
   // another thread's new CLI before the lookup reads this, mustn't count for
   // the new one (Codex's review, 18 Nov 2026).
+  // A CLI's entry whose start doesn't match throws StaleProcess rather than
+  // saying "no thread": the lookup then closes the connection, where "no
+  // thread" would leave the credential presented to decide (Codex's third
+  // review).
   threadOfPid(pid: number, created?: bigint): string | undefined {
     const own = this.entries.get(pid);
-    if (own) return startedAt(own, created) ? own.threadId : undefined;
+    if (own) {
+      if (!startedAt(own, created)) throw new StaleProcess(pid);
+      return own.threadId;
+    }
     let names: string[];
     try {
       names = fs.readdirSync(path.dirname(this.file)).filter((n) => /^children-\d+\.json$/.test(n));
@@ -124,6 +131,7 @@ export class ProcessRegistry {
       if (!e?.threadId) continue;
       if (created) {
         if (startedAt(e, created)) return e.threadId;
+        throw new StaleProcess(pid);
       } else if (!(e.lstart || e.started) || sameStart(e, processInfo(pid))) return e.threadId;
     }
     return undefined;
@@ -375,6 +383,12 @@ export function ownStartTime(): string {
 // FILETIME, from Windows' process list, whose times are a microsecond
 // coarser than Get-Process's, so they match to within one). No time to go
 // by on either side: the pid stands, as it did before.
+export class StaleProcess extends Error {
+  constructor(pid: number) {
+    super(`process ${pid} isn't the CLI registered with its id any more`);
+  }
+}
+
 export function startedAt(recorded: { lstart?: string }, created: bigint | undefined): boolean {
   if (!created || !recorded.lstart) return true;
   const exact = /^(\d+)$/.exec(recorded.lstart);

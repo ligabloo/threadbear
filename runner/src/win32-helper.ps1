@@ -23,6 +23,18 @@
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+
+# Only Windows' own modules, from System32 by full path, and nothing loaded
+# by name from anywhere else: PowerShell would otherwise find a module
+# called NetTCPIP or CimCmdlets in Documents\WindowsPowerShell\Modules first,
+# and a thread can write there (Codex's third review, 18 Nov 2026). The
+# commands below are called by their modules' names too.
+$PSModuleAutoLoadingPreference = 'None'
+$system = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\Modules"
+$env:PSModulePath = $system
+foreach ($m in 'Microsoft.PowerShell.Utility', 'CimCmdlets', 'NetTCPIP') {
+  Import-Module "$system\$m" -ErrorAction Stop
+}
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $in = [Console]::In
 $out = [Console]::Out
@@ -32,12 +44,12 @@ while ($true) {
   if ($null -eq $line) { break }
   $id = $null
   try {
-    $req = $line | ConvertFrom-Json
+    $req = $line | Microsoft.PowerShell.Utility\ConvertFrom-Json
     $id = $req.id
     switch ($req.op) {
       'ping' { $result = 'pong' }
       'processes' {
-        $rows = Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate | ForEach-Object {
+        $rows = CimCmdlets\Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate | ForEach-Object {
           $created = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 }
           "$($_.ProcessId) $($_.ParentProcessId) $created"
         }
@@ -52,7 +64,7 @@ while ($true) {
         # only one that means none: any other (access denied, the provider
         # failing) fails the snapshot, so it can't pass for "nobody's".
         try {
-          $found = @(Get-NetTCPConnection -State Established -RemotePort ([int]$req.port) -ErrorAction Stop)
+          $found = @(NetTCPIP\Get-NetTCPConnection -State Established -RemotePort ([int]$req.port) -ErrorAction Stop)
         } catch {
           if ($_.CategoryInfo.Category -ne 'ObjectNotFound') { throw }
           $found = @()
@@ -60,7 +72,7 @@ while ($true) {
         $conns = $found | Where-Object { $_ } | ForEach-Object {
           "c $($_.LocalAddress) $($_.LocalPort) $($_.RemoteAddress) $($_.RemotePort) $($_.OwningProcess)"
         }
-        $procs = Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate | ForEach-Object {
+        $procs = CimCmdlets\Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate | ForEach-Object {
           $created = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 }
           "p $($_.ProcessId) $($_.ParentProcessId) $created"
         }
@@ -68,9 +80,9 @@ while ($true) {
       }
       default { throw "unknown op: $($req.op)" }
     }
-    $answer = @{ id = $id; ok = $true; result = [string]$result } | ConvertTo-Json -Compress
+    $answer = @{ id = $id; ok = $true; result = [string]$result } | Microsoft.PowerShell.Utility\ConvertTo-Json -Compress
   } catch {
-    $answer = @{ id = $id; ok = $false; error = [string]$_ } | ConvertTo-Json -Compress
+    $answer = @{ id = $id; ok = $false; error = [string]$_ } | Microsoft.PowerShell.Utility\ConvertTo-Json -Compress
   }
   $out.WriteLine($answer)
   $out.Flush()
