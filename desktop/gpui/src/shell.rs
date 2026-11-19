@@ -286,6 +286,7 @@ actions!(
     threadbear,
     [
         NewThread,
+        ImportSessions,
         ArchiveThread,
         PickHibernateTime,
         WakeWhenPrompt,
@@ -375,6 +376,8 @@ macro_rules! commands {
 
 commands!(
     (NewThread, NewThread, Some(ShortcutCommand::NewThread)),
+    // File > Import from Claude Code…: no key of its own.
+    (ImportSessions, ImportSessions, None),
     (Archive, ArchiveThread, Some(ShortcutCommand::Archive)),
     (Hibernate, PickHibernateTime, Some(ShortcutCommand::Hibernate)),
     (WakeWhen, WakeWhenPrompt, None),
@@ -727,6 +730,7 @@ impl Threadbear {
     pub(crate) fn run_command(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         match command {
             Command::NewThread => self.new_thread(cx),
+            Command::ImportSessions => self.open_import_sheet(window, cx),
             Command::Archive => self.toggle_archive(window, cx),
             Command::Hibernate => {
                 if let Some(id) = self.selected.clone() {
@@ -1323,7 +1327,7 @@ impl Threadbear {
                     ])
                     .collect(),
             ),
-            TopMenu::new("File", vec![item("New Thread", Command::NewThread), Separator, item("Close", Command::Close)]),
+            TopMenu::new("File", vec![item("New Thread", Command::NewThread), item("Import from Claude Code…", Command::ImportSessions), Separator, item("Close", Command::Close)]),
             // The text commands, as AppKit's standard Edit menu has them;
             // AppKit adds AutoFill, Start Dictation and Emoji & Symbols
             // under them on a Mac (window_menu.rs).

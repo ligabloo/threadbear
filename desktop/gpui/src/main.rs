@@ -75,6 +75,7 @@ mod key_hints;
 mod librarian;
 mod mac_switch;
 mod media_view;
+mod import_sheet;
 mod move_sheet;
 mod new_thread;
 mod notify;

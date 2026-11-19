@@ -415,6 +415,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | `nav.deeplink` | Deep link | `threadbear://thread/<id>` | `register_url_scheme` and `on_open_urls`. | kit | S | `ThreadbearApp`, `ThreadLink` |
 | `menu.app` | App menu | About, Restart to Update, Settings…, Services | `set_menus`: NSMenu on macOS, drawn by `AppMenuBar` on Windows and Linux (inferred). | kit | S | `ThreadbearApp` |
 | `menu.file` | File menu | New Thread, Close (⌘W); closing the main window quits, as the last window | `set_menus`, as `menu.app`, with Close as AppKit's `performClose:` on a Mac. | kit | S | `ThreadbearApp`, `AppDelegate` |
+| `menu.importclaudecode` | Import from Claude Code | File > Import from Claude Code…: a sheet listing the Claude Code sessions on this Mac (the CLI's and the Claude desktop app's) that aren't threads yet, to tick and bring in as threads that carry on the same conversation; sessions another one started sit under it | GPUI-only, new in this app (the Swift app is frozen without it). `threadbear-core`'s `session_import` for the list, ticks and params; `gpui/src/import_sheet.rs` draws it; the runner side is `sessions.importable` and `threads.import`. | build | M | none (GPUI-only) |
 | `menu.edit` | Edit menu | Undo, Redo, Cut, Copy, Paste, Delete, Select All; on a Mac AppKit adds Writing Tools, AutoFill, Start Dictation and Emoji & Symbols | `set_menus` with gpui-kit's text actions, the Mac's own selectors for Cut, Copy, Paste and Select All. | kit | S | SwiftUI's standard menus |
 | `menu.window` | Window menu | Minimize, Zoom, Bring All to Front; on a Mac AppKit adds Fill, Center, Move & Resize and the open windows (a panel's own too), and View's Enter Full Screen | `set_menus`, the menu named Window being AppKit's windows menu. | kit | S | SwiftUI's standard menus |
 | `menu.view` | View menu | Zoom In, Out, Actual, Show Threads, Panels, Terminal, Reset | `set_menus`, as `menu.app`. | kit | S | `ThreadbearApp` |
@@ -502,23 +503,23 @@ Size is `none` throughout: the planning docs don't size these, and work the app 
 | Route | Inventory | Planned | All |
 |---|---|---|---|
 | kit | 65 | 1 | 66 |
-| build | 197 | 16 | 213 |
+| build | 198 | 16 | 214 |
 | web | 6 | 1 | 7 |
 | shim | 24 | 0 | 24 |
 | hard | 13 | 0 | 13 |
 | drop | 3 | 0 | 3 |
-| Total | 307 | 18 | 325 |
+| Total | 308 | 18 | 326 |
 
 **Per size**
 
 | Size | Inventory | Planned | All |
 |---|---|---|---|
 | S | 170 | 0 | 170 |
-| M | 95 | 0 | 95 |
+| M | 96 | 0 | 96 |
 | L | 33 | 0 | 33 |
 | XL | 5 | 0 | 5 |
 | none | 4 | 18 | 22 |
-| Total | 307 | 18 | 325 |
+| Total | 308 | 18 | 326 |
 
 **The `hard` rows**
 

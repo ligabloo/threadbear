@@ -631,6 +631,14 @@ File references are where to look.
   (never opened). Grok itself reads `~/.grok`, and as it does anywhere your
   `~/.claude` settings, hooks, skills and `CLAUDE.md`; its threads run your
   own Grok and Claude hooks.
+- When you ask it to import Claude Code sessions (`tb import`, or
+  `sessions.importable` from an app): the session files under each Claude
+  login's `projects/*/` folder and `~/.claude/projects/`, and the Claude
+  desktop app's session notes in
+  `~/Library/Application Support/Claude/claude-code-sessions/`, only for their
+  titles, folders and settings. It copies a session's transcript to the login
+  the thread runs on, if that isn't the one that has it, and changes nothing
+  in the originals. Nothing is read until you ask.
 - With the Shared memory experiment on (off unless you turn it on): on your
   main Mac, each Claude login's `CLAUDE.md` and the memory files under
   `projects/*/memory/` for folders in your home folder, once a minute, which

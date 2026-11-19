@@ -341,6 +341,17 @@ const settings = {
 };
 
 /** threadId -> { summary, events: [], inProgress: Map(itemId -> {type,text}), timers: [] } */
+// What sessions.importable offers (mock only).
+const importedSessions = new Set();
+const importedThreads = new Map();
+const importableSessions = [
+  { sessionId: '6a4f2d1c-0b7e-4c1a-9d3e-5f8a7b6c4d21', cwd: '/Users/alex/code/threadbear', title: 'Add a dark mode toggle', firstMessage: 'Add a dark mode toggle', lastActivityAt: Date.parse('2026-11-18T10:00:00Z'), configDir: '/Users/alex/.claude', source: 'cli' },
+  { sessionId: '0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8', cwd: '/Users/alex/code/stagehand', title: 'Stagehand', firstMessage: 'Plan the scene tree', lastActivityAt: Date.parse('2026-11-12T09:00:00Z'), configDir: '/Users/alex/.claude', source: 'desktop' },
+  { sessionId: '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f', cwd: '/Users/alex/code/stagehand', title: 'Scene tree worker', firstMessage: 'Build the scene tree', lastActivityAt: Date.parse('2026-11-12T10:00:00Z'), configDir: '/Users/alex/.claude', source: 'desktop', parentSessionId: '0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8', spawnedAs: 'agent' },
+  { sessionId: '1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b', cwd: '/Users/alex/code/old-site', title: 'Fix the footer links', firstMessage: 'Fix the footer links', lastActivityAt: Date.parse('2026-10-02T09:00:00Z'), configDir: '/Users/alex/.claude', source: 'desktop', archived: true },
+  { sessionId: '9e8d7c6b-5a49-4837-9625-14031221a0b9', cwd: '/gone/folder', title: 'Try the old prototype', firstMessage: 'Try the old prototype', lastActivityAt: Date.parse('2026-09-20T09:00:00Z'), configDir: '/Users/alex/.claude', source: 'cli' },
+];
+
 const threads = new Map();
 // A reconnect spec's deliberately unreadable list, without damaging its
 // transcripts or real summaries. No live runner implements this method.
@@ -778,6 +789,50 @@ async function dispatch(client, method, p) {
       if (startIn.length) broadcastProjects();
       setTimeout(() => fakeTurn(threadId, p.text, p.images ?? []), 10);
       return { thread: summary };
+    }
+    // Claude Code sessions to bring in (protocol "Importing Claude Code
+    // sessions"): one from the CLI, one the desktop app knows, one it
+    // archived, and one whose folder isn't on this Mac.
+    case 'sessions.importable': {
+      const all = importableSessions.filter((x) => !importedSessions.has(x.sessionId));
+      const shown = all.filter((x) => p.archived === true || !x.archived);
+      return { sessions: typeof p.limit === 'number' ? shown.slice(0, p.limit) : shown };
+    }
+    case 'threads.import': {
+      const importOne = (found) => {
+        importedSessions.add(found.sessionId);
+        const threadId = 'th_import_' + crypto.randomBytes(4).toString('hex');
+        const now = iso();
+        const parentThread = found.parentSessionId ? importedThreads.get(found.parentSessionId) : undefined;
+        const summary = {
+          id: threadId, title: found.title, cwd: found.cwd, accountId: defaults.accountId, provider: providerOf(defaults.accountId),
+          permissionMode: 'full', status: 'idle', live: false, needsYou: false,
+          createdAt: now, updatedAt: now, lastActivityAt: now, preview: found.firstMessage, lastSeq: 0, lastSeenSeq: 0,
+          ...(found.archived ? { archivedAt: now, archivedBy: 'mike' } : {}),
+          ...(parentThread ? { startedBy: { kind: 'thread', label: 'Thread', threadId: parentThread } } : {}),
+        };
+        importedThreads.set(found.sessionId, threadId);
+        threads.set(threadId, { summary, events: [], inProgress: new Map(), timers: [] });
+        broadcastSummary(threadId);
+        return summary;
+      };
+      const found = importableSessions.find((x) => x.sessionId === p.sessionId);
+      if (!found) throw rpcError(-32602, `No Claude Code session ${p.sessionId} found on this Mac.`);
+      if (importedSessions.has(found.sessionId)) throw rpcError(-32602, 'That session is already a thread.');
+      if (found.cwd.startsWith('/gone/')) throw rpcError(-32602, `The session's folder ${found.cwd} isn't on this Mac. Give another folder to run it in.`);
+      const thread = importOne(found);
+      const children = [];
+      const skipped = [];
+      if (p.withChildren) {
+        const walk = (id) => {
+          for (const kid of importableSessions.filter((x) => x.parentSessionId === id && !importedSessions.has(x.sessionId))) {
+            if (kid.cwd.startsWith('/gone/')) skipped.push({ sessionId: kid.sessionId, error: `The session's folder ${kid.cwd} isn't on this Mac.` });
+            else { children.push(importOne(kid)); walk(kid.sessionId); }
+          }
+        };
+        walk(found.sessionId);
+      }
+      return { thread, children, skipped };
     }
     // Update it (protocol "Runner updates"): running at once, and up to
     // date about 2 s later, as staging goes.

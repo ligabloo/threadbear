@@ -27,6 +27,9 @@ const OPTIONS = {
   // tb move <id> --to <runner> --preview (moving a thread to another machine).
   preview: { type: 'boolean' },
   account: { type: 'string' },
+  // tb import (Claude Code sessions to threads).
+  'into-project': { type: 'boolean' },
+  'with-children': { type: 'boolean' },
   pool: { type: 'string' },
   model: { type: 'string' },
   effort: { type: 'string' },
@@ -176,6 +179,13 @@ const HELP = `tb: talk to the Threadbear runner
   tb retitle [<threadId>...] [--dry-run] [--json]
                                   a model title for every thread still named by its first line,
                                   or for the ones given (never one named by hand)
+  tb import [--list] [--all] [--archived] [--into-project] [--with-children] [--cwd <folder>] [--account <id>] [<sessionId>...]
+                                  Claude Code sessions (the CLI's and the desktop app's) as threads
+                                  that carry on the same conversation; --list shows what can be
+                                  imported, --all brings in every one listed (--into-project also
+                                  puts each in a project for its folder; --with-children also
+                                  brings in the sessions an orchestrating session started, nested
+                                  under it)
 
 Thread ids can be shortened to any unique prefix.
 Uses THREADBEAR_HOME and THREADBEAR_PORT like the runner does.
@@ -824,6 +834,46 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
     }
     case 'models':
       return modelsCommand(client, args, f);
+    case 'import': {
+      const listed = await client.call<{ sessions: { sessionId: string; title: string; cwd: string; lastActivityAt: number; source: string; archived?: boolean; parentSessionId?: string }[] }>('sessions.importable', { archived: Boolean(f.archived) });
+      if (f.list) {
+        if (f.json) console.log(JSON.stringify(listed.sessions, null, 2));
+        else {
+          for (const s of listed.sessions) console.log(`${s.sessionId}  ${new Date(s.lastActivityAt).toISOString().slice(0, 10)}  ${s.cwd}  ${s.parentSessionId ? '↳ ' : ''}${s.title}${s.archived ? '  (archived)' : ''}`);
+          if (!listed.sessions.length) console.log('Nothing to import: every Claude Code session on this Mac is already a thread.');
+        }
+        return 0;
+      }
+      if (!args.length && !f.all) {
+        console.error(`Give the session ids to import, or --all for every one (${listed.sessions.length} now). tb import --list shows them.`);
+        return 1;
+      }
+      // A session before the ones it started, so they nest under its thread.
+      const ids = args.length ? args : listed.sessions.map((s) => s.sessionId);
+      const parentOf = new Map(listed.sessions.map((s) => [s.sessionId, s.parentSessionId]));
+      const depth = (id: string): number => { let n = 0; for (let p = parentOf.get(id); p && n < 20; p = parentOf.get(p)) n++; return n; };
+      ids.sort((a, b) => depth(a) - depth(b));
+      let failed = 0;
+      for (const sessionId of ids) {
+        try {
+          const params: Record<string, unknown> = { sessionId, intoProject: Boolean(f['into-project']), withChildren: Boolean(f['with-children']) };
+          // One folder or login for several sessions is rarely what's meant.
+          if (f.cwd && ids.length === 1) params.cwd = path.resolve(String(f.cwd));
+          if (f.account) params.accountId = f.account;
+          const r = await client.call<{ thread: ThreadSummary; children?: ThreadSummary[]; skipped?: { sessionId: string; error: string }[] }>('threads.import', params);
+          console.log(`${r.thread.id}  ${r.thread.title}`);
+          for (const c of r.children ?? []) console.log(`${c.id}  ↳ ${c.title}`);
+          for (const k of r.skipped ?? []) {
+            failed++;
+            console.error(`${k.sessionId}: ${k.error}`);
+          }
+        } catch (e) {
+          failed++;
+          console.error(`${sessionId}: ${(e as Error).message}`);
+        }
+      }
+      return failed ? 1 : 0;
+    }
     case 'retitle': {
       const dryRun = Boolean(f['dry-run']);
       const threadIds = args.length ? await Promise.all(args.map((a) => resolveId(client, a))) : undefined;

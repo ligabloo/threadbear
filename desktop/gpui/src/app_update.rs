@@ -595,6 +595,7 @@ impl Threadbear {
             || self.share_popover.is_some()
             || self.anything.is_some()
             || self.move_sheet.is_some()
+            || self.import_sheet.is_some()
     }
 
     /// What holds a restart, as the end of "It switches in once ...", for

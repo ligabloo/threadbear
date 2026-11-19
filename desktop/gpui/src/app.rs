@@ -269,6 +269,8 @@ pub struct Threadbear {
     pub(crate) connectors_panel: crate::connectors_panel::ConnectorsPanelState,
     /// Each thread's slash commands, for the composer's palette.
     pub(crate) slash: crate::slash_palette::SlashState,
+    /// The Import from Claude Code sheet, while it's up (import_sheet.rs).
+    pub(crate) import_sheet: Option<Entity<crate::import_sheet::ImportSheet>>,
     /// The Move sheet, while it's up (move_sheet.rs).
     pub(crate) move_sheet: Option<Entity<crate::move_sheet::MoveSheet>>,
     /// The pane beside the thread: Highlights, previews, Patches, Files (highlights.rs).
@@ -593,6 +595,7 @@ impl Threadbear {
             updates_panel: Default::default(),
             connectors_panel: Default::default(),
             slash: Default::default(),
+            import_sheet: None,
             move_sheet: None,
             side,
             side_views: HashMap::new(),
@@ -1696,6 +1699,8 @@ impl Threadbear {
         // bar: the sidebar's, when the list couldn't be read. Never the
         // connection's (Mike, 12 Nov: the raw error mid-restart).
         dump["notes"] = json!(self.list_error.iter().collect::<Vec<_>>());
+        // The Import from Claude Code sheet while it's up (import_sheet.rs).
+        dump["importSheet"] = self.import_sheet.as_ref().map_or(Value::Null, |s| s.read(cx).dump(cx));
         // What came across from the Swift app, while its note's up. Set
         // after, as the literal above is as long as serde_json's macro goes.
         dump["importNote"] = json!(self.import_note);

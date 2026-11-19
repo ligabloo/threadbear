@@ -716,6 +716,17 @@ export class RpcServer {
         });
         return { thread: res.thread, turnId: res.turnId };
       }
+      case 'sessions.importable':
+        return r.importable({ archived: p.archived === true, limit: optInt(p, 'limit') });
+      case 'threads.import':
+        return r.importSession({
+          sessionId: reqString(p, 'sessionId'),
+          cwd: optString(p, 'cwd'),
+          accountId: optString(p, 'accountId'),
+          title: optString(p, 'title'),
+          intoProject: p.intoProject === true,
+          withChildren: p.withChildren === true,
+        });
       case 'threads.samples':
         return r.samples({ cwd: reqString(p, 'cwd'), remove: p.remove === true });
       case 'reviews.list':

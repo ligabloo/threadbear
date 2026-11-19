@@ -512,6 +512,7 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         "connectors" => crate::connectors_panel::automation(app, cmd, cx),
         "usage" => crate::usage::automation(app, cmd, cx),
         "move" => crate::move_sheet::automation(app, cmd, window, cx),
+        "import" => crate::import_sheet::automation(app, cmd, window, cx),
         "anything" => crate::open_anything::automation(app, cmd, window, cx),
         "terminal" => crate::terminal::automation(app, cmd, window, cx),
         // As the Swift app's: the window in front and key, for pictures on a

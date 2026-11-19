@@ -94,6 +94,7 @@ export type Dump = {
    *  lines read ("Inbox | ⌘1"), and the pick's title. */
   anything?: { query: string; groups: { title: string; items: string[] }[]; picked?: string | null; recent: string[] } | null;
   /** The Move sheet while it's up. */
+  importSheet?: { loading: boolean; loadError?: string | null; includeArchived: boolean; intoProjects: boolean; withChildren: boolean; running: boolean; canImport: boolean; button: string; progress?: string | null; empty?: string | null; rows: { id: string; title: string; folder: string; depth: number; implied: boolean; desktop: boolean; archived: boolean; picked: boolean; state: string; error?: string | null }[] } | null;
   moveSheet?: { title: string; subtitle: string; folder: string; login: string; problems: string[]; leftBehind: string[]; clone?: string | null; cloneFrom?: string | null; asking: boolean; canMove: boolean } | null;
   decisions?: string[] | null;
   transcript: {

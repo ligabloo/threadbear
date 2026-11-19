@@ -1259,6 +1259,27 @@ there. Agents can do the same with `move_thread` and a `runner`, and
 `tb move <thread> --to <machine>` (`--preview` to see where it would go).
 Moves are started from your first Mac and need Threadbear's backend.
 
+### Bringing in Claude Code sessions
+
+Sessions you started in Claude Code, in a terminal or in the Claude desktop
+app's Code tab, can become threads that carry on the same conversation. In the
+Mac app, choose File > Import from Claude Code…: a sheet lists the sessions
+that aren't threads yet, with the desktop app's titles, to tick and import.
+Show archived adds the ones the desktop app archived, Put in projects by
+folder files each thread in a project for its folder, and when a session
+started others (the desktop app's Projects page does that), Include the
+sessions it started brings them in nested under it. A session that can't come
+in says why under its row, and the rest still do. From a terminal, run
+`tb import --list` to see them (the desktop app's titles come along), then
+`tb import <session id>` for the ones you want, or `tb import --all`. The
+thread opens in the session's own folder, on the login that holds it, and
+shows the last 100 messages; the agent still remembers everything in the
+session, tool calls included. A session the desktop app had archived or
+starred comes in archived or starred. Add `--into-project` to put each thread
+in a project for its folder, making one named for the folder when there isn't
+one. The desktop app's Projects page is a session that starts other sessions: import it with `--with-children` and the sessions it started come in too, nested under its thread (`--all` brings parents in first, so they nest as well). A session already in a thread is left alone, and one whose folder is
+gone needs `--cwd <folder>` to run in. Nothing in Claude Code is changed.
+
 ## Accounts, pools and Usage
 <!-- slug: accounts -->
 

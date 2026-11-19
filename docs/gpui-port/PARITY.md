@@ -261,6 +261,29 @@ run or a screenshot from the running app. A slice with no runtime check doesn't
 count. (Ghostex's port log is where this shape comes from; its slices 214 to 268
 built parsers and gates with no launch of the app, which is the trap.)
 
+### 2026-11-19 Import from Claude Code (`menu.importclaudecode`, GPUI-only)
+
+- New in the GPUI app, not a port: the Swift app is frozen without it, so its
+  scenarios are `@swift-pending`. File > Import from Claude Code… opens a
+  sheet over the runner's `sessions.importable`: each session that isn't a
+  thread yet (title, folder, date, a Desktop badge when the Claude desktop
+  app knows it), to tick; Show archived, Put in projects by folder, and
+  Include the sessions it started (shown when one session started another:
+  those sit one step in under their parent, are ticked with it and come in
+  nested). Import calls `threads.import` for each in turn, parents first,
+  and says how each went under its row: a folder that's gone shows the
+  runner's words and the rest still come in.
+- Files: `desktop/core/src/session_import.rs`, `desktop/gpui/src/import_sheet.rs`,
+  `features/import-sessions.feature`, the mock runner's `sessions.importable`
+  and `threads.import`.
+- Verification: `cargo test -p threadbear-core --lib session_import`, 11 of 11;
+  the sheet driven in the headless GPUI app on the mock runner (open, tick,
+  Import: three threads came in and showed in the sidebar, the one with a
+  missing folder said why, a shot of each step looked at). The
+  `@menu.importclaudecode` scenarios themselves haven't been run (Cucumber
+  isn't installed on this Mac); `npm run check`'s pairing step and
+  `check-feature-pairing.test.ts` pass.
+
 ### 2026-11-13 Restarting onto the next version hands over, and threads keep their place (`system.handover`, `system.selfupdate`)
 
 - The GPUI app's restart onto a staged build was the window going and coming

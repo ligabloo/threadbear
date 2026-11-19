@@ -1257,6 +1257,8 @@ the summary and then the reply.
 | `threads.list` | `{ include?: ("inbox" \| "snoozed" \| "archived")[], ids?: string[] }` (default `["inbox"]`; a value the runner doesn't know is left out; `ids` keeps only those threads, unknown ones left out; an older runner ignores it, so pick yours out of the answer) | `{ threads: ThreadSummary[] }` newest activity first |
 | `threads.search` | `{ query: string, limit?: number }` | `{ threads: ThreadSummary[] }` matches title, preview and `keywords` across all threads, archived included (Search) |
 | `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? }, detached?: true, projectIds?: string[] }` | `{ thread: ThreadSummary }` (the first turn starts straight away). `confined: true` is refused (see Sandboxed threads (taken out)). `projectIds` (New Thread on a project's page) puts it in those projects before its first turn, pinned as Mike's, so that turn already has their brief; an unknown project is `-32602` and makes no thread. In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. With no `permissionMode`, `defaults.permissionMode`, or else `"full"`; the runner's own threads (bringing in releases, fixing a failed update, a note about this Mac) always name `"full"`. See "Models and effort across providers" |
+| `sessions.importable` | `{ archived?: boolean, limit?: number }` | `{ sessions: ImportableSession[] }`: Claude Code sessions on this Mac that aren't threads yet, newest first (see Importing Claude Code sessions). `archived: true` includes ones the desktop app archived |
+| `threads.import` | `{ sessionId: string, cwd?: string, accountId?: string, title?: string, intoProject?: boolean, withChildren?: boolean }` | `{ thread: ThreadSummary, children: ThreadSummary[], skipped: { sessionId, error }[] }`. Makes a thread from one Claude Code session; no turn runs. `withChildren` also imports the sessions it started, and theirs (`children`, parents first; one that can't come in is in `skipped` and doesn't stop the rest). `-32602` for an id that isn't a session id, one that isn't on this Mac, one that is already a thread, or a folder that's gone with no `cwd` to run in; `-32000` when the transcript can't be copied to the login |
 | `threads.samples` | `{ cwd: string, remove?: boolean }` | `{ threads: ThreadSummary[] }`. The app's first-run tour's sample threads (`runner/src/samples.ts`): made up exchanges written as finished turns with no CLI, in `cwd` (the app's `~/ThreadbearThreads/Welcome`, where it writes an example patch), with `sample: true`; the first needs you, with a card of asks, and one is left unread. Asking again deletes any there are and makes them afresh (writing the patch again if it's gone, and trusting it as written). `remove: true` deletes them all, archived and hibernating ones too, and returns none. `threads.send` to a sample is `-32602` |
 | `threads.send` | `{ threadId, text, images?: ImageRef[], answers?: AskAnswer[], origin?: "phone", runnerId?: string \| null }` | `{ turnId }`. `runnerId` is the runner the client shows the thread on (`null` for this Mac's own): given, the primary refuses the message with `-32031` when it would reach any other runner (a thread still on the runner it's moving from, say), rather than passing it on; absent, it's routed as before, except that a message for another runner's thread is refused the same way while this runner knows of a move of it under way (an older app may have shown it as already moved). `text` can place the `images` among its words with `[Picture N]` markers (Pictures in a message). `origin: "phone"` is only for a phone command the primary passes on to a draining runner (Sync, "Commands"), so the message keeps its origin there; any other `origin` is `-32602`. If a turn is running and its CLI is live, the message goes into that turn straight away (a `user.message` under the running `turnId`, which is returned): the agent takes it at its next step, or right after its reply if that was already finishing, and the turn doesn't complete until it has been answered. If the thread was moved to another login (usually another provider) during the running turn, a message from Mike (or the phone) doesn't steer into the old CLI: the turn is stopped (`system.note` "Stopped here so <model> can take over.") and the message starts the next turn on the new login, with the handoff, as T3 Code does. If the agent is waiting on a card for its own tool call (an approval or a question, with an `itemId`), a message from Mike declines that card first (`approval.resolved` with `deny` and a `message` telling the agent he wrote instead), as the CLI reads nothing else until the card is answered; a background subagent's card is left open. Otherwise (the CLI is still starting or leaving, messages are already waiting, a move or fresh CLI is due on the next turn, Stop has been pressed, or the turn was opened only for a card) the message is queued and starts its own turn when the running one ends |
 | `threads.interrupt` | `{ threadId }` | `{}`. Stop ends the turn. Claude reports which user inputs it queued, started and cancelled. An input it never started is saved, including pictures, with a `system.note`; one it started is a deliberate cancel, even at zero tokens. With no receipt support, the fallback saves only a turn with no model output and zero input/output tokens, or one whose CLI never became ready. Saved inputs persist across restarts and precede the next ordinary user message in one model input, with pictures renumbered. Stop alone never retries them. `/clear` discards them; other slash commands and scheduled messages leave them saved. Editing a message discards saved rows in the cut history, and restores earlier saved rows when the edit cuts the input that carried them. A move to another runner drops automatic replay state (the original messages stay in its history). Missing pictures are marked unavailable; recovery only reads pictures inside this thread's own media folder |
@@ -2686,6 +2688,48 @@ thread to another login when the one it's on runs out of room.
   never moves. Threads from before pools stay pinned. A pool's logins
   include noted ones only when it lists them, so a "Convex work only"
   login only runs threads in a pool that names it.
+
+## Importing Claude Code sessions
+
+Claude Code keeps each session as a transcript, `<login folder>/projects/<folder as a name>/<sessionId>.jsonl`.
+The Claude desktop app's Code tab uses the same transcripts and adds a small
+file per session under `~/Library/Application Support/Claude/claude-code-sessions/`
+(its `cliSessionId` is the transcript's id; it has a `title`, `cwd`, `model`,
+`permissionMode`, `isArchived` and `isStarred`). Neither layout is documented,
+so every read is forgiving and a file that doesn't fit is left out.
+
+- `sessions.importable` looks under every Claude login's folder and
+  `~/.claude`, skips a session with nothing said in it and any that a thread
+  already resumes (`nativeSessionId` with `sessionUsed`), and gives
+  `{ sessionId, cwd, title, firstMessage, lastActivityAt, configDir, source,
+  archived?, starred?, model?, effort?, permissionMode? }`. `source` is
+  `desktop` when the desktop app knows the session, whose title, folder and
+  settings then win over what the transcript gives.
+- `threads.import` makes the thread in the session's folder (or `cwd`, when
+  that's gone), on the login that holds the transcript (or `accountId`,
+  which gets a copy as a move between logins does: `copySessionTranscript`,
+  the original kept). It sets `nativeSessionId` to the session and
+  `sessionUsed`, so the next message resumes the session itself. Nothing runs.
+- Its transcript is a `system.note` ("Imported from Claude Code…") and the
+  last 100 messages, the person's and the assistant's words, as finished turns
+  (as a quick ask is kept). Tool calls, thinking and sub-agents stay in the
+  CLI's transcript, which the agent still has.
+- A desktop session that was archived or starred is archived (by `mike`) or
+  starred. A `model` or `permissionMode` it names is used when this login
+  can run it. `intoProject: true` joins the first project that lists the
+  folder, or makes one named for it.
+- **Orchestrating sessions.** The desktop app's Projects (beta) page is
+  sessions that start other sessions. It keeps no project file of its own
+  that we found; each started session's note has `spawnedFrom: { sessionId
+  (the parent's `local_` id), btw?, userFork?, name? }` (and
+  `forkedFromSessionId`). `sessions.importable` gives such a session
+  `parentSessionId` (the parent's CLI id) and `spawnedAs`: `side` for a side
+  question or fork, `agent` for work an orchestrator sent off. A session
+  imported when its parent is already a thread gets `startedBy: { kind:
+  "thread", threadId }`, so it nests under it (Nested threads); `withChildren`
+  does that for a whole tree, and `tb import --all` brings parents in first.
+- `tb import --list`, `tb import <id>...`, `tb import --all` and
+  `--with-children`.
 
 ## Pictures in a message
 
